@@ -1,0 +1,429 @@
+---
+title: "Affymetrix data analysis"
+author: "Ignasi Jarne Sanz"
+date: "19/4/2022"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Working directory and packages
+````{r}
+setwd("C:/Users/User/Desktop/omic/")
+````
+
+`````{r warning = FALSE, message= FALSE}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(oligo)
+library(Biobase)
+library(arrayQualityMetrics)
+library(ggplot2)
+library(ggrepel)
+library(Rcpp)
+library(genefilter)
+library(clariomdhumantranscriptcluster.db)
+library(limma)
+library(org.Hs.eg.db)
+library(grDevices)
+library(ggnewscale)
+library(gplots)
+library(GO.db)
+library(GOstats)
+library(reactome.db)
+library(ReactomePA)
+`````
+
+## Characterization and sample selection.
+#### Aleatory sample selection
+Out of 47 total samples, we will collect 15 (5 per group). 
+This 47 samples are stored in a subdirectory called "copia".
+````{r}
+noms_raw <- list.files("./copia/")
+numbers <- seq(1,47, by=1)
+fenotip <- rep(c("Symptomatic","Asymptomatic","Healthy controls"),
+               times=c(11,18,18))
+
+Muestras <- data.frame(numbers,noms_raw,fenotip)
+head(Muestras)
+
+set.seed(2907)
+Sym <- sample(1:11, 5, replace = F);sort(Sym)
+Asym <- sample(12:29, 5, replace = F);sort(Asym)
+Heal <- sample(30:47, 5, replace = F);sort(Heal)
+print(Muestras[c(Sym,Asym,Heal),])
+````
+
+We create a target tile based on the selected samples, this target file is stored in a subdirectory called "dades".
+````{r, include=FALSE}
+targets <- read.csv2("./dades/targets.csv")
+
+targets %>%
+  kbl(caption = "Selected samples") %>%
+  kable_classic(full_width = T, html_font = "Cambria")
+````
+
+We list the selected files, that we will have stored a subdirectory called "dades".
+````{r warinig=FALSE, message = FALSE}
+celFiles <- list.celfiles("./dades", full.names = T)
+my.targets <- read.AnnotatedDataFrame(file.path("./dades","targets.csv"),
+                                      header = T, row.names = 1,
+                                      sep = ";")
+rawData <- read.celfiles(celFiles, phenoData = my.targets)
+````
+
+Change the data names for readable names.
+````{r}
+head(rawData@assayData[["exprs"]])
+colnames(rawData) <-rownames(pData(rawData)) <- my.targets@data$ShortName # Changing the name
+head(rawData@assayData[["exprs"]]) # Checking the names
+````
+
+
+## Quality control and data exploration of the raw expression data
+Applying "arrayQualitMetrics" on the raw data, this creates a .html file with quality metrics regardin the loaded data.
+````{r, warning=FALSE}
+arrayQualityMetrics(rawData,
+                    outdir =file.path("./resultats", "QC_Raw"), force = T)
+````
+
+Some exploratory analysis on our expression data
+
+### Density plot
+````{r}
+colors <- rep(c(1,2,3),times=c(5,5,5))
+hist(rawData, main="Signal distribution for the raw expression data", col=colors)
+````
+
+### Boxplots
+````{r}
+boxplot(rawData, main="Signal distribution for the raw expression data", col=colors, las=2)
+````
+
+Las gáficas generadas en este apartado nos muestran que los datos no están normalizados.
+
+### PCA
+````{r}
+# función
+plotPCA3 <- function (datos, labels, factor, title, scale,colores, size = 1.5, glineas = 0.25) {
+  data <- prcomp(t(datos),scale=scale)
+  # plot adjustments
+  dataDf <- data.frame(data$x)
+  Group <- factor
+  loads <- round(data$sdev^2/sum(data$sdev^2)*100,1)
+  # main plot
+  p1 <- ggplot(dataDf,aes(x=PC1, y=PC2)) +
+    theme_classic() +
+    geom_point(aes(color = Group), alpha = 0.55, size = 3) +
+    coord_cartesian(xlim = c(min(data$x[,1])-5,max(data$x[,1])+5)) +
+    scale_fill_discrete(name = "Group")
+  p1 + geom_text(aes(y = PC2 +6500, x=PC1+15000,  
+                     label = labels), size=size)+
+    labs(x = c(paste("PC1",loads[1],"%")),y=c(paste("PC2",loads[2],"%"))) +  
+    ggtitle("PCA for the raw data")+ 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values=colores)
+}
+
+plotPCA3(exprs(rawData), labels=targets$ShortName, factor = targets$Grup,
+        title = "Raw Data", scale=FALSE, size=3,
+        colores = c("red","blue","green"))
+````
+
+
+## Expression data RMA transformation
+````{r}
+normData <- rma(rawData)
+````
+
+## Quality control on the RMA transformed data
+````{r warning=FALSE}
+arrayQualityMetrics(normData,
+                    outdir =file.path("./resultats", "QC_Norm"), force = T)
+````
+
+### Density plot
+````{r}
+colors <- rep(c(1,2,3),times=c(5,5,5))
+hist(normData, main="Signal distribution for the normalized expression data", col=colors)
+````
+
+### Boxplots
+````{r}
+boxplot(normData, main="Signal distribution for the normalized expression data", col=colors, las=2)
+````
+
+### PCA
+````{r}
+# función
+plotPCA3 <- function (datos, labels, factor, title, scale,colores, size = 1.5, glineas = 0.25) {
+  data <- prcomp(t(datos),scale=scale)
+  # plot adjustments
+  dataDf <- data.frame(data$x)
+  Group <- factor
+  loads <- round(data$sdev^2/sum(data$sdev^2)*100,1)
+  # main plot
+  p1 <- ggplot(dataDf,aes(x=PC1, y=PC2)) +
+    theme_classic() +
+    geom_point(aes(color = Group), alpha = 0.55, size = 3) +
+    coord_cartesian(xlim = c(min(data$x[,1])-5,max(data$x[,1])+5)) +
+    scale_fill_discrete(name 
+                        = "Group")
+  # avoiding labels superposition
+  p1 + geom_text(aes(y = PC2+5, x=PC1+5,  
+                     label = labels), size=size)+
+    labs(x = c(paste("PC1",loads[1],"%")),y=c(paste("PC2",loads[2],"%"))) +  
+    ggtitle("PCA for the normalized data")+
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values=colores)
+}
+
+plotPCA3(exprs(normData), labels=targets$ShortName, factor = targets$Grup,
+        title = "Norm", scale=FALSE, size=3,
+        colores = c("red","blue","green"))
+````
+
+
+## Non specific gene filtering
+We will filter the 25% of genes that show the greatest variation between groups. This step is not mandatory.
+````{r}
+annotation(normData) <- "clariomdhumantranscriptcluster.db"
+filtered <- nsFilter(normData,
+                     require.entrez = T, remove.dupEntrez = T,
+                     var.filter = T, var.func = IQR, var.cutoff = 0.75,
+                     filterByQuantile = T, feature.exclude = "^AFFX")
+
+print(filtered$filter.log)
+````
+
+
+```{r}
+filtered_data <- filtered$eset
+filteredData <- exprs(filtered_data)
+colnames(filteredData) <- pData(filtered$eset)$ShortName
+```
+
+
+## DEGs identification
+Design matrix
+```{r}
+grup <- pData(filtered$eset)$Grup
+lev <- factor(grup, levels = unique(grup))
+design <- model.matrix(~0+lev)
+colnames(design) <- levels(lev)
+rownames(design) <- targets$ShortName
+print(design)
+```
+
+Contrast matrix
+```{r}
+contrast_mat <- makeContrasts(SympvsAsymp = Symp-Asymp,
+                              SympvsHealth = Symp-Healthy,
+                              AsympvsHealth = Asymp-Healthy,
+                              levels = design)
+print(contrast_mat)
+```
+
+Linear model generation
+```{r}
+fit <- lmFit(filteredData, design)
+fiit.main <- contrasts.fit(fit, contrast_mat)
+fiit.main <- eBayes(fiit.main)
+```
+
+Results extraction
+```{r}
+TT_Sym_vs_Asym <- topTable(fiit.main, number = nrow(fiit.main), coef = "SympvsAsymp",adjust.method = "fdr")
+TT_Sym_vs_Health <- topTable(fiit.main, number = nrow(fiit.main), coef = "SympvsHealth",adjust.method = "fdr")
+TT_Asymp_vs_Health <- topTable(fiit.main, number = nrow(fiit.main), coef = "AsympvsHealth",adjust.method = "fdr")
+```
+
+Some numbers
+```{r}
+DEGs1 <- nrow(topTable(fiit.main, number = nrow(fiit.main), coef = "SympvsAsymp",adjust.method = "fdr",
+                       lfc = 2, p.value = 0.05));DEGs1
+DEGs2 <- nrow(topTable(fiit.main, number = nrow(fiit.main), coef = "SympvsHealth",adjust.method = "fdr",
+                       lfc = 2, p.value = 0.05));DEGs2
+DEGs3 <- nrow(topTable(fiit.main, number = nrow(fiit.main), coef = "AsympvsHealth",adjust.method = "fdr",
+                       lfc = 2, p.value = 0.05));DEGs3
+```
+
+
+## Results annotations
+````{r}
+keytypes(clariomdhumantranscriptcluster.db)
+````
+We will extract the following information:
+
+- Symbol
+
+- ENTREZID
+
+- Gene name
+
+````{r}
+annotations <- AnnotationDbi::select(clariomdhumantranscriptcluster.db, keys = rownames(filteredData),columns = c("SYMBOL","GENENAME","ENTREZID"))
+head(annotations)
+````
+
+Getting the extracted annotation with our results.
+````{r}
+TT_Sym_vs_Asym <- TT_Sym_vs_Asym %>%
+  mutate(PROBEID=rownames(TT_Sym_vs_Asym)) %>%
+  left_join(annotations) %>%
+  arrange(P.Value)
+TT_Sym_vs_Asym <- TT_Sym_vs_Asym[,c(7,8,9,10,
+                                    1,2,3,4,5,6)]
+
+
+TT_Sym_vs_Health <- TT_Sym_vs_Health %>%
+  mutate(PROBEID=rownames(TT_Sym_vs_Health)) %>%
+  left_join(annotations) %>%
+  arrange(P.Value)
+TT_Sym_vs_Health <- TT_Sym_vs_Health[,c(7,8,9,10,
+                                    1,2,3,4,5,6)]
+
+
+
+TT_Asymp_vs_Health <- TT_Asymp_vs_Health %>%
+  mutate(PROBEID=rownames(TT_Asymp_vs_Health)) %>%
+  left_join(annotations) %>%
+  arrange(P.Value)
+TT_Asymp_vs_Health <- TT_Asymp_vs_Health[,c(7,8,9,10,
+                                    1,2,3,4,5,6)]
+
+head(TT_Sym_vs_Asym)
+````
+
+## Comparing results.
+````{r}
+gene_sym <- select(clariomdhumantranscriptcluster.db, rownames(fiit.main), c("SYMBOL"))
+gene_sym <- gene_sym$SYMBOL
+````
+
+### Volcano plots
+#### Contrast 1
+````{r}
+volcanoplot(fiit.main, coef = 1, highlight = 15, names = gene_sym,main=paste("DEGs:", colnames(contrast_mat)[1]))
+````
+
+#### Contrast 2
+````{r}
+volcanoplot(fiit.main, coef = 2, highlight = 15, names = gene_sym,main=paste("DEGs:", colnames(contrast_mat)[2]))
+````
+
+#### Contrast 3
+````{r}
+volcanoplot(fiit.main, coef = 3, highlight = 15, names = gene_sym,main=paste("DEGs:", colnames(contrast_mat)[3]))
+````
+
+### Comparing results
+#### Venn Diagram
+Preparing the data
+````{r}
+comparing <- decideTests(fiit.main, method = "separate", adjust.method = "fdr",
+                         p.value = 0.05, lfc = 2)
+comparing_rows <- apply(abs(comparing),1,sum)
+comparing_sel <- comparing[comparing_rows!=0,]
+print(summary(comparing))
+````
+
+Plotting
+```{r}
+vennDiagram(comparing_sel[,1:3], cex = 0.9,
+            circle.col = c("blue","red","green"))
+title("Common DEGs between contrasts\n (p.adj < 0.05 y LFC>2)")
+```
+
+
+#### Heatmap
+Preparing the data
+````{r}
+probes_heat <- rownames(comparing_sel)
+heat_data <- exprs(filtered_data)[rownames(exprs(filtered_data)) %in% probes_heat,]
+heat_symbols <- select(clariomdhumantranscriptcluster.db, rownames(heat_data), c("SYMBOL"))
+heat_symbols <- heat_symbols$SYMBOL
+rownames(heat_data) <- heat_symbols
+head(heat_data)
+````
+
+Plotting
+````{r}
+heatmap.2(heat_data,
+          Rowv = T,
+          Colv = T,
+          dendrogram = "both",
+          main = "Genes diferencialmente expresados\n (FDR <0.05 lFC >2)",
+          scale = "row",
+          col = colorRampPalette(c("blue","red"))(n=300),
+          sepcolor = "white",
+          sepwidth = c(0.05,0.05),
+          cexRow = 0.5,
+          cexCol = 0.9,
+          key = T,
+          keysize = 1.5,
+          density.info = "density",
+          ColSideColors = c(rep("red",5),rep("blue",5),rep("green",5)),
+          tracecol = NULL,
+          srtCol = 30)
+````
+
+## Biological significance analysis
+Preparing the data
+````{r}
+tables_to_use <- list(Symp_vs_Asymp = TT_Sym_vs_Asym,
+                      Symp_vs_Healthy = TT_Sym_vs_Health,
+                      Asym_vs_Healty = TT_Asymp_vs_Health)
+
+list_of_selected <- list()
+for (i in 1:length(tables_to_use)){
+  topTab <- tables_to_use[[i]]
+  genes_to_use <- topTab["adj.P.Val"]<0.15
+  IDs_to_use <- (topTab$PROBEID)[genes_to_use]
+  EntrezID <- select(clariomdhumantranscriptcluster.db, IDs_to_use, c("ENTREZID"))
+  EntrezID <- EntrezID$ENTREZID
+  list_of_selected[[i]] <- EntrezID
+  names(list_of_selected)[i] <- names(tables_to_use)[i]
+}
+
+sapply(list_of_selected, length)
+````
+
+Mapping GO and KEGG annotations:
+````{r}
+mapped_to_GO <- mappedkeys(org.Hs.egGO)
+mapped_to_2KEGG <- mappedkeys(org.Hs.egPATH)
+mapped_genes <- union(mapped_to_GO, mapped_to_2KEGG)
+````
+
+Applying Reactome in order to extract the results.
+````{r}
+list_of_data <- list_of_selected[1:3]
+comparisons <- names(list_of_data)
+universe <- mapped_genes
+
+for (i in 1:length(list_of_data)){
+  genes_IN <- list_of_data[[i]]
+  comparison <- comparisons[i]
+  enrich.result <- enrichPathway(gene = genes_IN,
+                                 pvalueCutoff = 0.05,
+                                 pAdjustMethod = "BH",
+                                 organism = "human",
+                                 universe = universe)
+  if (length(rownames(enrich.result@result))!=0){
+    write.csv2(as.data.frame(enrich.result),
+               file = paste0("./resultats/","ReactomePA.results", comparison,".csv"),
+               row.names = F)
+    print(barplot(enrich.result, showCategory = 15, font.size = 4,
+                  title = paste0(comparison)))
+  }
+}
+````
+
+
